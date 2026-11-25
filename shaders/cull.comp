@@ -1,0 +1,102 @@
+/**
+ * @file cull.comp
+ * @brief GPU frustum culling for the instance list.
+ *
+ * One invocation handles one candidate instance. It rejects the instance
+ * only when its world-space AABB is completely outside one of the six
+ * frustum planes; otherwise it appends the instance index to the visible
+ * list and bumps the atomic draw counter. The vertex shaders read the
+ * visible list and degenerate every instance at or above the counter.
+ *
+ * This pass implements pure frustum culling. A depth-based Hi-Z occlusion
+ * test would be an engine-side extension (it needs a previous-frame depth
+ * pyramid and a second dispatch), so no occlusion path is kept here.
+ *
+ * Descriptor set 0 bindings (see src/re_renderer.h):
+ *   0 camera UBO (std140)
+ *   5 instance SSBO (std430, 96-byte ReSceneInstance records)
+ *   6 visible list SSBO (std430, uint32 instance indices)
+ *   7 draw args SSBO (std430, draw_count is the atomic at byte 20)
+ *
+ * Push constant: uint instance_count (offset 0, 4 bytes).
+ */
+#version 460
+
+layout(local_size_x = 64) in;
+
+/* Binding 0: camera block, 320 bytes. */
+layout(std140, set = 0, binding = 0) uniform Camera {
+    mat4 view;
+    mat4 proj;
+    mat4 view_proj;
+    vec4 frustum_planes[6];
+    vec4 cam_pos_far;
+    uint instance_count;
+    uint point_light_count;
+    vec2 padding;
+} camera;
+
+/* Binding 5: 96-byte instance record. The trailing words are raw uint32
+ * material/flags values and are not read here. */
+struct Instance {
+    mat4 model;
+    vec4 aabb_min_material;
+    vec4 aabb_max_flags;
+};
+
+layout(std430, set = 0, binding = 5) readonly buffer Instances {
+    Instance instances[];
+} instance_buffer;
+
+/* Binding 6: instances that survived the cull, in atomic append order. */
+layout(std430, set = 0, binding = 6) writeonly buffer Visible {
+    uint visible_list[];
+} visible_buffer;
+
+/* Binding 7: indirect arguments plus the atomic counter (byte 20). */
+layout(std430, set = 0, binding = 7) buffer DrawArgs {
+    uint index_count;
+    uint instance_count;
+    int first_index;
+    int vertex_offset;
+    uint first_instance;
+    uint draw_count;
+} draw_args;
+
+/* Push constant: number of submitted instances to test. */
+layout(push_constant) uniform PushCull {
+    uint instance_count;
+} push_data;
+
+/** @brief Appends one instance index to the visible list. */
+void append_visible(uint instance_index) {
+    uint slot = atomicAdd(draw_args.draw_count, 1u);
+    visible_buffer.visible_list[slot] = instance_index;
+}
+
+void main() {
+    uint instance_index = gl_GlobalInvocationID.x;
+
+    if (instance_index >= push_data.instance_count) {
+        return;
+    }
+
+    Instance instance = instance_buffer.instances[instance_index];
+    vec3 aabb_min = instance.aabb_min_material.xyz;
+    vec3 aabb_max = instance.aabb_max_flags.xyz;
+
+    /* Separating-axis test: the AABB is outside a plane when even its
+     * positive vertex (the corner farthest along the plane normal) is on
+     * the negative side. */
+    for (int plane_index = 0; plane_index < 6; ++plane_index) {
+        vec4 plane = camera.frustum_planes[plane_index];
+        vec3 positive_vertex = mix(aabb_min, aabb_max,
+                                   greaterThanEqual(plane.xyz, vec3(0.0)));
+
+        if (dot(plane.xyz, positive_vertex) + plane.w < 0.0) {
+            return;
+        }
+    }
+
+    append_visible(instance_index);
+}

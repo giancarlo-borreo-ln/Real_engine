@@ -1,0 +1,18 @@
+# Doxyfile for Real Engine (compact configuration)
+PROJECT_NAME           = "Real Engine"
+PROJECT_BRIEF          = "C23 data-oriented 3D game engine"
+OUTPUT_DIRECTORY       = doc
+INPUT                  = src
+RECURSIVE              = YES
+FILE_PATTERNS          = *.c *.h
+EXTRACT_ALL            = YES
+EXTRACT_STATIC         = NO
+HIDE_UNDOC_MEMBERS     = NO
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+GENERATE_XML           = NO
+QUIET                  = YES
+WARN_IF_UNDOCUMENTED   = NO
+OPTIMIZE_OUTPUT_FOR_C  = YES
+CASE_SENSE_NAMES       = YES
+SORT_MEMBER_DOCS       = YES
